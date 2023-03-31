@@ -1,0 +1,77 @@
+# 1、ansible离线部署k8s
+编写yaml文件deploy-kubernetes.yaml
+---
+- name: Install Docker and Kubernetes on nodes
+  hosts: all
+  become: true
+  vars:
+    master_ip: "192.168.1.100"
+    worker_ips:
+      - "192.168.1.101"
+      - "192.168.1.102"
+  tasks:
+    - name: Copy Docker installation files
+      copy:
+        src: "/path/to/docker-ce-{{ ansible_distribution_release }}.tgz"
+        dest: "/tmp/docker-ce-{{ ansible_distribution_release }}.tgz"
+      when: inventory_hostname == master_ip or inventory_hostname in worker_ips
+
+    - name: Install Docker
+      shell: |
+        cd /tmp/
+        tar -xzf docker-ce-{{ ansible_distribution_release }}.tgz
+        cd docker-ce-{{ ansible_distribution_release }}
+        docker_version=$(ls docker*.deb)
+        sudo dpkg -i ${docker_version}
+      when: inventory_hostname == master_ip or inventory_hostname in worker_ips
+
+    - name: Copy Kubernetes installation files
+      copy:
+        src: "/path/to/kubernetes-{{ kubernetes_version }}-{{ ansible_distribution | lower }}-{{ ansible_architecture }}.tar.gz"
+        dest: "/tmp/kubernetes-{{ kubernetes_version }}-{{ ansible_distribution | lower }}-{{ ansible_architecture }}.tar.gz"
+      when: inventory_hostname == master_ip or inventory_hostname in worker_ips
+
+    - name: Install Kubernetes packages
+      shell: |
+        cd /tmp/
+        tar -xzf kubernetes-{{ kubernetes_version }}-{{ ansible_distribution | lower }}-{{ ansible_architecture }}.tar.gz
+        cd kubernetes
+        sudo dpkg -i kubectl_{{ kubernetes_version }}-00_amd64.deb
+        sudo dpkg -i kubelet_{{ kubernetes_version }}-00_amd64.deb
+        sudo dpkg -i kubeadm_{{ kubernetes_version }}-00_amd64.deb
+      when: inventory_hostname == master_ip or inventory_hostname in worker_ips
+
+    - name: Configure Kubernetes Master
+      shell: |
+        sudo kubeadm init --apiserver-advertise-address={{ master_ip }} --pod-network-cidr=192.168.0.0/16
+        mkdir -p $HOME/.kube
+        sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+        sudo chown $(id -u):$(id -g) $HOME/.kube/config
+      when: inventory_hostname == master_ip
+
+    - name: Copy Kubernetes config
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/ubuntu/.kube/config
+        remote_src: true
+      when: inventory_hostname == master_ip
+
+    - name: Get Kubernetes join token
+      shell: |
+        sudo kubeadm token create --print-join-command > /tmp/kubeadm_join_token.txt
+        cat /tmp/kubeadm_join_token.txt | grep -v 'kubeadm join' | tr -d '\\' > /tmp/kubeadm_join_token_clean.txt
+      register: kubeadm_join_token
+      when: inventory_hostname == master_ip
+
+    - name: Copy Kubernetes join token
+      copy:
+        src: /tmp/kubeadm_join_token_clean.txt
+        dest: /home/ubuntu/kubeadm_join_token.txt
+      when: inventory_hostname == master
+# 运行ansible
+ansible-playbook -i hosts.yaml deploy-kubernetes.yaml
+
+
+##
+请注意，此示例代码假定您已经在 Ansible 主机上配置了 SSH 公钥，并可以通过 SSH 连接到目标服务器。此外，它还假定所有节点都运行 Ubuntu 操作系统，并且您已经将节点的 IP 地址添加到 Ansible 的主机清单文件中。
+
